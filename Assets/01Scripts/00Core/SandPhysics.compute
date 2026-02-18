@@ -1,0 +1,53 @@
+#pragma kernel Update
+
+RWTexture2D<float4> Result;
+uint Width;
+uint Height;
+float2 MousePos;
+bool IsMouseDown;
+float BrushSize;
+
+[numthreads(8, 8, 1)]
+void Update (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= Width || id.y >= Height) return;
+
+    // 1. Handle Input: If mouse is down and near this pixel, spawn sand
+    if (IsMouseDown)
+    {
+        float dist = distance((float2)id.xy, MousePos);
+        if (dist < BrushSize)
+        {
+            Result[id.xy] = float4(0.76, 0.7, 0.5, 1.0); // Sand Color
+        }
+    }
+
+    // 2. Physics Logic (Simplified Cellular Automata)
+    float4 current = Result[id.xy];
+    
+    // Only process if this pixel is Sand (Alpha > 0)
+    if (current.a > 0 && id.y > 0)
+    {
+        float4 below = Result[id.xy + uint2(0, -1)];
+        float4 belowLeft = Result[id.xy + uint2(-1, -1)];
+        float4 belowRight = Result[id.xy + uint2(1, -1)];
+
+        // Move Down
+        if (below.a == 0)
+        {
+            Result[id.xy + uint2(0, -1)] = current;
+            Result[id.xy] = float4(0, 0, 0, 0);
+        }
+        // Slide Diagonally (creates the pile effect)
+        else if (id.x > 0 && belowLeft.a == 0)
+        {
+            Result[id.xy + uint2(-1, -1)] = current;
+            Result[id.xy] = float4(0, 0, 0, 0);
+        }
+        else if (id.x < Width - 1 && belowRight.a == 0)
+        {
+            Result[id.xy + uint2(1, -1)] = current;
+            Result[id.xy] = float4(0, 0, 0, 0);
+        }
+    }
+}
