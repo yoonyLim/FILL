@@ -1,51 +1,74 @@
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.InputSystem;
 
 public class SandManager : MonoBehaviour
 {
     public ComputeShader sandCompute;
-    public RawImage displayImage; // Assign a UI RawImage to see the result
-    public int resolution = 2560;
-    public float brushSize = 1f;
+    public RawImage displayImage; 
+    public float brushSize = 10f;
 
     private RenderTexture _sandTexture;
     private int _kernelIndex;
+    private int _width;
+    private int _height;
 
     void Start()
     {
-        // 1. Setup RenderTexture
-        _sandTexture = new RenderTexture(2560, 1440, 0);
+        // 1. Match Resolution to Screen
+        _width = Screen.width;
+        _height = Screen.height;
+
+        // 2. Setup RenderTexture to match display exactly
+        _sandTexture = new RenderTexture(_width, _height, 0);
         _sandTexture.enableRandomWrite = true;
-        _sandTexture.filterMode = FilterMode.Point; // Keep pixels sharp
+        _sandTexture.filterMode = FilterMode.Point;
         _sandTexture.Create();
 
-        // 2. Link to UI
+        // 3. Link to UI
         displayImage.texture = _sandTexture;
         _kernelIndex = sandCompute.FindKernel("Update");
+        
+        // Clear the texture to black/transparent initially
+        ClearTexture();
     }
 
     void Update()
     {
-        // Convert Mouse Position to Texture Space
-        Vector2 localCursor;
-        RectTransformUtility.ScreenPointToLocalPointInRectangle(
-            displayImage.rectTransform, Input.mousePosition, null, out localCursor);
+        Vector2 mousePos = Mouse.current.position.ReadValue();
+        
+        // DRIZZLE LOGIC: Only true on the frame the button is pressed
+        bool isBurstFrame = Mouse.current.leftButton.wasPressedThisFrame;
+        bool isDragging = Mouse.current.leftButton.isPressed && !isBurstFrame;
 
-        // Normalize cursor to 0-1 and scale to resolution
-        float x = (localCursor.x / displayImage.rectTransform.rect.width + 0.5f) * resolution;
-        float y = (localCursor.y / displayImage.rectTransform.rect.height + 0.5f) * resolution;
+        // Convert screen space to texture space
+        float x = mousePos.x;
+        float y = mousePos.y;
+
+        // Safety check: Ensure mouse is actually within the window bounds
+        if (x < 0 || x >= _width || y < 0 || y >= _height) return;
 
         // Pass data to GPU
         sandCompute.SetTexture(_kernelIndex, "Result", _sandTexture);
-        sandCompute.SetInt("Width", resolution);
-        sandCompute.SetInt("Height", resolution);
         sandCompute.SetVector("MousePos", new Vector2(x, y));
-        sandCompute.SetBool("IsMouseDown", Input.GetMouseButton(0));
         sandCompute.SetFloat("BrushSize", brushSize);
+        
+        sandCompute.SetInt("Width", _width);
+        sandCompute.SetInt("Height", _height);
+        
+        sandCompute.SetBool("IsBurst", isBurstFrame);
+        sandCompute.SetBool("IsDragging", isDragging);
 
-        // Dispatch (Execute the shader)
-        // Groups of 8x8 as defined in the [numthreads] section of the shader
-        int groups = Mathf.CeilToInt(resolution / 8f);
-        sandCompute.Dispatch(_kernelIndex, groups, groups, 1);
+        int threadGroupX = Mathf.CeilToInt(_width / 8f);
+        int threadGroupY = Mathf.CeilToInt(_height / 8f);
+        sandCompute.Dispatch(_kernelIndex, threadGroupX, threadGroupY, 1);
+    }
+
+    void ClearTexture()
+    {
+        // Optional: Initialize texture with empty pixels
+        RenderTexture.active = _sandTexture;
+        GL.Clear(true, true, Color.clear);
+        RenderTexture.active = null;
     }
 }

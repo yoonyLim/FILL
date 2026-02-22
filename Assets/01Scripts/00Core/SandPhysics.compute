@@ -1,50 +1,67 @@
 #pragma kernel Update
 
 RWTexture2D<float4> Result;
-uint Width;
-uint Height;
+int Width;
+int Height;
 float2 MousePos;
 bool IsMouseDown;
 float BrushSize;
 
+bool IsBurst;
+bool IsDragging;
+
+float rand(float2 co)
+{
+    return frac(sin(dot(co.xy, float2(12.9898, 78.233))) * 43758.5453);
+}
+
 [numthreads(8, 8, 1)]
 void Update (uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= Width || id.y >= Height) return;
+    // Boundary Check
+    if ((int)id.x >= Width || (int)id.y >= Height) return;
 
-    // 1. Handle Input: If mouse is down and near this pixel, spawn sand
-    if (IsMouseDown)
+    // 1. Spawn Drizzle
+    if (IsBurst || IsDragging)
     {
         float dist = distance((float2)id.xy, MousePos);
         if (dist < BrushSize)
         {
-            Result[id.xy] = float4(0.76, 0.7, 0.5, 1.0); // Sand Color
+            // Adding a slight random alpha makes the "drizzle" look more natural
+            float spawnProbability = rand(id.xy + MousePos); // Offset by MousePos so every click is unique
+            
+            float threshold = IsBurst ? 0.8 : 0.98;
+        
+            if (spawnProbability > threshold && Result[id.xy].a == 0)
+            {
+                // Subtle color variation for each grain to make it look like real sand
+                float colorVariation = (rand(id.xy) - 0.5) * 0.1;
+                float4 sandColor = float4(0.8 + colorVariation, 0.7 + colorVariation, 0.4, 1.0);
+            
+                Result[id.xy] = sandColor;
+            }
         }
     }
 
-    // 2. Physics Logic (Simplified Cellular Automata)
+    // 2. Physics: Bottom-Up processing is technically better for sand, 
+    // but for a simple CA, we check the current pixel.
     float4 current = Result[id.xy];
     
-    // Only process if this pixel is Sand (Alpha > 0)
     if (current.a > 0 && id.y > 0)
     {
-        float4 below = Result[id.xy + uint2(0, -1)];
-        float4 belowLeft = Result[id.xy + uint2(-1, -1)];
-        float4 belowRight = Result[id.xy + uint2(1, -1)];
-
-        // Move Down
-        if (below.a == 0)
+        // Check directly below
+        if (Result[id.xy + uint2(0, -1)].a == 0)
         {
             Result[id.xy + uint2(0, -1)] = current;
             Result[id.xy] = float4(0, 0, 0, 0);
         }
-        // Slide Diagonally (creates the pile effect)
-        else if (id.x > 0 && belowLeft.a == 0)
+        // Check diagonals for mounding effect
+        else if (id.x > 0 && Result[id.xy + uint2(-1, -1)].a == 0)
         {
             Result[id.xy + uint2(-1, -1)] = current;
             Result[id.xy] = float4(0, 0, 0, 0);
         }
-        else if (id.x < Width - 1 && belowRight.a == 0)
+        else if (id.x < (uint)Width - 1 && Result[id.xy + uint2(1, -1)].a == 0)
         {
             Result[id.xy + uint2(1, -1)] = current;
             Result[id.xy] = float4(0, 0, 0, 0);
