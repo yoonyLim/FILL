@@ -23,6 +23,6 @@ public class MainMenuManager : MonoBehaviour
     public void Set4kResolution()
     {
         Debug.Log(Screen.width + ":" + Screen.height);
-        GameManager.Instance.SetResolution(3480, 2160);
+        GameManager.Instance.SetResolution(3840, 2160);
     }
 }

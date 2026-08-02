@@ -29,6 +29,7 @@ public class GameManager : MonoBehaviour
     public void SetResolution(int width, int height)
     {
         Debug.Log(width + ":" + height);
+        mainCanvas.GetComponent<SandManager>().SetResolution(width, height);
         Screen.SetResolution(width, height, Screen.fullScreenMode);
     }
 

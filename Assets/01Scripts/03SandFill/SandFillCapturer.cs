@@ -29,7 +29,7 @@ public class SandFillCapturer : MonoBehaviour
         
         if (rt == null)
         {
-            Debug.LogWarning("RawImage does not have a RenderTexture assigned!");
+            Debug.Log("RawImage does not have a RenderTexture assigned!");
             return;
         }
         

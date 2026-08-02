@@ -6,6 +6,9 @@ int Height;
 float2 MousePos;
 bool IsMouseDown;
 float BrushSize;
+float4 SandColor;
+bool RandomSandSaturation;
+bool RandomSandColor;
 
 bool IsBurst;
 bool IsDragging;
@@ -13,6 +16,43 @@ bool IsDragging;
 float rand(float2 co)
 {
     return frac(sin(dot(co.xy, float2(12.9898, 78.233))) * 43758.5453);
+}
+
+float3 rgbToHsv(float3 color)
+{
+    float maximum = max(color.r, max(color.g, color.b));
+    float minimum = min(color.r, min(color.g, color.b));
+    float difference = maximum - minimum;
+
+    float hue = 0.0;
+    if (difference > 0.00001)
+    {
+        if (maximum == color.r)
+        {
+            hue = (color.g - color.b) / difference;
+        }
+        else if (maximum == color.g)
+        {
+            hue = 2.0 + (color.b - color.r) / difference;
+        }
+        else
+        {
+            hue = 4.0 + (color.r - color.g) / difference;
+        }
+
+        hue = frac(hue / 6.0);
+    }
+
+    float saturation = maximum > 0.00001 ? difference / maximum : 0.0;
+    return float3(hue, saturation, maximum);
+}
+
+float3 hsvToRgb(float3 hsv)
+{
+    float3 channels = abs(
+        frac(hsv.xxx + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    float3 rgb = saturate(channels - 1.0);
+    return hsv.z * lerp(float3(1.0, 1.0, 1.0), rgb, hsv.y);
 }
 
 [numthreads(8, 8, 1)]
@@ -34,11 +74,26 @@ void Update (uint3 id : SV_DispatchThreadID)
         
             if (spawnProbability > threshold && Result[id.xy].a == 0)
             {
-                // Subtle color variation for each grain to make it look like real sand
-                float colorVariation = (rand(id.xy) - 0.5) * 0.1;
-                float4 sandColor = float4(0.8 + colorVariation, 0.7 + colorVariation, 0.4, 1.0);
-            
-                Result[id.xy] = sandColor;
+                float3 hsv = rgbToHsv(saturate(SandColor.rgb));
+
+                // Color and saturation are randomized independently so both
+                // settings remain meaningful when enabled together.
+                if (RandomSandColor)
+                {
+                    hsv.x = rand(id.xy + MousePos + float2(31.17, 7.91));
+                }
+
+                if (RandomSandSaturation)
+                {
+                    hsv.y = lerp(
+                        0.35,
+                        1.0,
+                        rand(id.yx + MousePos.yx + float2(13.73, 47.21)));
+                }
+
+                // Retain the original subtle brightness variation between grains.
+                hsv.z = saturate(hsv.z + (rand(id.xy + 83.19) - 0.5) * 0.1);
+                Result[id.xy] = float4(hsvToRgb(hsv), 1.0);
             }
         }
     }
