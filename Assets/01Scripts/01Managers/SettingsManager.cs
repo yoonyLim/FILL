@@ -4,6 +4,10 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 [RequireComponent(typeof(Canvas))]
 [RequireComponent(typeof(GraphicRaycaster))]
 public class SettingsManager : MonoBehaviour
@@ -34,6 +38,9 @@ public class SettingsManager : MonoBehaviour
     [Header("Display")]
     [SerializeField] private TMP_Dropdown resolutionDropdown;
     [SerializeField] private Toggle fullScreenToggle;
+
+    [Header("Quit")]
+    [SerializeField] private Button quitButton;
 
     private readonly List<Vector2Int> _availableResolutions = new();
     private Canvas _settingsOverlayCanvas;
@@ -155,6 +162,17 @@ public class SettingsManager : MonoBehaviour
 
         fullScreenToggle?.SetIsOnWithoutNotify(enabled);
         PlayerPrefs.SetInt(FullScreenKey, enabled ? 1 : 0);
+    }
+
+    public void QuitGame()
+    {
+        PlayerPrefs.Save();
+
+#if UNITY_EDITOR
+        EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 
     private void SetSettingsOpen(bool open)
@@ -299,6 +317,7 @@ public class SettingsManager : MonoBehaviour
         sandColorBlueSlider?.onValueChanged.AddListener(OnColorSliderChanged);
         resolutionDropdown?.onValueChanged.AddListener(SetResolutionByIndex);
         fullScreenToggle?.onValueChanged.AddListener(SetFullScreen);
+        quitButton?.onClick.AddListener(QuitGame);
     }
 
     private void OnColorSliderChanged(float unusedValue)
@@ -347,5 +366,6 @@ public class SettingsManager : MonoBehaviour
         sandColorBlueSlider?.onValueChanged.RemoveListener(OnColorSliderChanged);
         resolutionDropdown?.onValueChanged.RemoveListener(SetResolutionByIndex);
         fullScreenToggle?.onValueChanged.RemoveListener(SetFullScreen);
+        quitButton?.onClick.RemoveListener(QuitGame);
     }
 }
