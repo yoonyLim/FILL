@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
@@ -21,6 +22,8 @@ public class SettingsManager : MonoBehaviour
     private const string ResolutionWidthKey = PreferencesPrefix + "ResolutionWidth";
     private const string ResolutionHeightKey = PreferencesPrefix + "ResolutionHeight";
     private const string FullScreenKey = PreferencesPrefix + "FullScreen";
+    private const string ColorPalettePath = "Control Panel/Color Palette";
+    private static readonly Vector2Int DefaultResolution = new(1280, 720);
 
     [Header("Overlay")]
     [SerializeField] private bool startClosed = true;
@@ -39,10 +42,13 @@ public class SettingsManager : MonoBehaviour
     [SerializeField] private TMP_Dropdown resolutionDropdown;
     [SerializeField] private Toggle fullScreenToggle;
 
-    [Header("Quit")]
+    [Header("Other Buttons")]
+    [SerializeField] private Button vacuumSandsButton;
     [SerializeField] private Button quitButton;
 
     private readonly List<Vector2Int> _availableResolutions = new();
+    private readonly List<Button> _paletteButtons = new();
+    private readonly List<UnityAction> _paletteButtonActions = new();
     private Canvas _settingsOverlayCanvas;
     private GraphicRaycaster _settingsOverlayRaycaster;
     private bool _isOpen;
@@ -164,6 +170,11 @@ public class SettingsManager : MonoBehaviour
         PlayerPrefs.SetInt(FullScreenKey, enabled ? 1 : 0);
     }
 
+    public void VacuumSands()
+    {
+        sandManager?.ClearSand();
+    }
+
     public void QuitGame()
     {
         PlayerPrefs.Save();
@@ -228,8 +239,15 @@ public class SettingsManager : MonoBehaviour
             }
         }
 
-        int savedWidth = PlayerPrefs.GetInt(ResolutionWidthKey, Screen.width);
-        int savedHeight = PlayerPrefs.GetInt(ResolutionHeightKey, Screen.height);
+        bool hasSavedResolution =
+            PlayerPrefs.HasKey(ResolutionWidthKey) &&
+            PlayerPrefs.HasKey(ResolutionHeightKey);
+        int savedWidth = hasSavedResolution
+            ? PlayerPrefs.GetInt(ResolutionWidthKey)
+            : DefaultResolution.x;
+        int savedHeight = hasSavedResolution
+            ? PlayerPrefs.GetInt(ResolutionHeightKey)
+            : DefaultResolution.y;
         int resolutionIndex = FindResolutionIndex(savedWidth, savedHeight);
 
         if (resolutionDropdown != null && resolutionIndex >= 0)
@@ -238,7 +256,7 @@ public class SettingsManager : MonoBehaviour
             resolutionDropdown.RefreshShownValue();
         }
 
-        if (PlayerPrefs.HasKey(ResolutionWidthKey) && resolutionIndex >= 0)
+        if (resolutionIndex >= 0)
         {
             Vector2Int resolution = _availableResolutions[resolutionIndex];
 
@@ -271,6 +289,11 @@ public class SettingsManager : MonoBehaviour
         if (!_availableResolutions.Contains(currentSize))
         {
             _availableResolutions.Add(currentSize);
+        }
+
+        if (!_availableResolutions.Contains(DefaultResolution))
+        {
+            _availableResolutions.Add(DefaultResolution);
         }
 
         _availableResolutions.Sort((left, right) =>
@@ -317,7 +340,63 @@ public class SettingsManager : MonoBehaviour
         sandColorBlueSlider?.onValueChanged.AddListener(OnColorSliderChanged);
         resolutionDropdown?.onValueChanged.AddListener(SetResolutionByIndex);
         fullScreenToggle?.onValueChanged.AddListener(SetFullScreen);
+        vacuumSandsButton?.onClick.AddListener(VacuumSands);
         quitButton?.onClick.AddListener(QuitGame);
+        RegisterPaletteButtons();
+    }
+
+    private void RegisterPaletteButtons()
+    {
+        Transform paletteRoot = transform.Find(ColorPalettePath);
+        if (paletteRoot == null)
+        {
+            Debug.LogWarning(
+                $"Color palette was not found at '{ColorPalettePath}'.",
+                this);
+            return;
+        }
+
+        foreach (Button paletteButton in paletteRoot.GetComponentsInChildren<Button>(true))
+        {
+            Image colorImage = paletteButton.targetGraphic as Image;
+            if (colorImage == null)
+            {
+                colorImage = paletteButton.GetComponent<Image>();
+            }
+
+            if (colorImage == null)
+            {
+                Debug.LogWarning(
+                    $"Palette button '{paletteButton.name}' does not have a color Image.",
+                    paletteButton);
+                continue;
+            }
+
+            Color paletteColor = colorImage.color;
+            UnityAction selectColor = () => SelectPaletteColor(paletteColor);
+
+            paletteButton.onClick.AddListener(selectColor);
+            _paletteButtons.Add(paletteButton);
+            _paletteButtonActions.Add(selectColor);
+        }
+    }
+
+    private void SelectPaletteColor(Color color)
+    {
+        // A fixed palette hue and random hue generation are mutually exclusive.
+        SetRandomSandColor(false);
+        SetSandColor(color);
+    }
+
+    private void UnregisterPaletteButtons()
+    {
+        for (int index = 0; index < _paletteButtons.Count; index++)
+        {
+            _paletteButtons[index]?.onClick.RemoveListener(_paletteButtonActions[index]);
+        }
+
+        _paletteButtons.Clear();
+        _paletteButtonActions.Clear();
     }
 
     private void OnColorSliderChanged(float unusedValue)
@@ -366,6 +445,8 @@ public class SettingsManager : MonoBehaviour
         sandColorBlueSlider?.onValueChanged.RemoveListener(OnColorSliderChanged);
         resolutionDropdown?.onValueChanged.RemoveListener(SetResolutionByIndex);
         fullScreenToggle?.onValueChanged.RemoveListener(SetFullScreen);
+        vacuumSandsButton?.onClick.RemoveListener(VacuumSands);
         quitButton?.onClick.RemoveListener(QuitGame);
+        UnregisterPaletteButtons();
     }
 }

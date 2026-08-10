@@ -12,7 +12,7 @@ public class SandManager : MonoBehaviour
     [Min(1)] public int maxSimulationStepsPerFrame = 8;
 
     [Header("Sand Appearance")]
-    [SerializeField] private Color sandColor = new(0.8f, 0.7f, 0.4f, 1f);
+    [SerializeField] private Color sandColor = new(0.8f, 0.7f, 0.4f, 1f); // rgb: 204, 178.5, 102
     [SerializeField] private bool randomSandSaturation;
     [SerializeField] private bool randomSandColor;
     [FormerlySerializedAs("randomColorCycleDuration")]
@@ -38,7 +38,7 @@ public class SandManager : MonoBehaviour
     public bool RandomSandSaturation => randomSandSaturation;
     public bool RandomSandColor => randomSandColor;
 
-    void Start()
+    void Awake()
     {
         _kernelIndex = sandCompute.FindKernel("Update");
         _currentRandomColorHue = Random.value;
@@ -95,24 +95,8 @@ public class SandManager : MonoBehaviour
         Pointer pointer = Pointer.current;
         if (pointer == null) return;
 
-        int screenWidth = Screen.width;
-        int screenHeight = Screen.height;
-
-        if (screenWidth <= 0 || screenHeight <= 0) return;
-
         Vector2 pointerPosition = pointer.position.ReadValue();
-
-        if (pointerPosition.x < 0 || pointerPosition.x >= screenWidth ||
-            pointerPosition.y < 0 || pointerPosition.y >= screenHeight)
-        {
-            return;
-        }
-
-        // The Editor can scale the Game view independently from the render texture.
-        // Normalize from Game-view coordinates into sand-texture coordinates.
-        _pointerTexturePosition = new Vector2(
-            pointerPosition.x * _width / screenWidth,
-            pointerPosition.y * _height / screenHeight);
+        if (!TryConvertToTexturePosition(pointerPosition, out _pointerTexturePosition)) return;
 
         // A mouse click, primary touch, or pen press all use the same pointer controls.
         _pointerPressed = pointer.press.isPressed;
@@ -226,6 +210,60 @@ public class SandManager : MonoBehaviour
             _pointerPressed = false;
             _pendingBurst = false;
         }
+    }
+
+    public void QueueSandBurst(Vector2 screenPosition)
+    {
+        if (!_inputEnabled ||
+            !TryConvertToTexturePosition(screenPosition, out Vector2 texturePosition))
+        {
+            return;
+        }
+
+        _pointerTexturePosition = texturePosition;
+        _pendingBurstPosition = texturePosition;
+        _pendingBurst = true;
+    }
+
+    private bool TryConvertToTexturePosition(
+        Vector2 screenPosition,
+        out Vector2 texturePosition)
+    {
+        texturePosition = default;
+
+        int screenWidth = Screen.width;
+        int screenHeight = Screen.height;
+        if (screenWidth <= 0 || screenHeight <= 0 || _width <= 0 || _height <= 0)
+        {
+            return false;
+        }
+
+        if (screenPosition.x < 0 || screenPosition.x >= screenWidth ||
+            screenPosition.y < 0 || screenPosition.y >= screenHeight)
+        {
+            return false;
+        }
+
+        // The Editor can scale the Game view independently from the render texture.
+        // Normalize from Game-view coordinates into sand-texture coordinates.
+        texturePosition = new Vector2(
+            screenPosition.x * _width / screenWidth,
+            screenPosition.y * _height / screenHeight);
+        return true;
+    }
+
+    public void ClearSand()
+    {
+        _simulationAccumulator = 0f;
+        _pointerPressed = false;
+        _pendingBurst = false;
+
+        if (_sandTexture == null || !_sandTexture.IsCreated())
+        {
+            return;
+        }
+
+        ClearTexture();
     }
 
     public void SetResolution(int width, int height)

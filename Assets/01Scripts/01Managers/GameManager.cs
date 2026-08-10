@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 
 public class GameManager : MonoBehaviour
@@ -7,6 +6,8 @@ public class GameManager : MonoBehaviour
 
     [SerializeField] private GameObject mainCanvas;
     [SerializeField] private GameObject menuCanvas;
+
+    private SandManager _sandManager;
 
     private void Awake()
     {
@@ -18,6 +19,9 @@ public class GameManager : MonoBehaviour
         {
             Instance = this;
             DontDestroyOnLoad(this.gameObject);
+            _sandManager = mainCanvas != null
+                ? mainCanvas.GetComponent<SandManager>()
+                : null;
         }
     }
 
@@ -35,7 +39,13 @@ public class GameManager : MonoBehaviour
 
     public void StartGame()
     {
-        mainCanvas.SetActive(true);
-        menuCanvas.SetActive(false);
+        mainCanvas?.SetActive(true);
+        menuCanvas?.SetActive(false);
+    }
+
+    public void StartGame(Vector2 initialPointerPosition)
+    {
+        StartGame();
+        _sandManager?.QueueSandBurst(initialPointerPosition);
     }
 }
