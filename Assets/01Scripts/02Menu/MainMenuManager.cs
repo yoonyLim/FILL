@@ -1,28 +1,13 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 public class MainMenuManager : MonoBehaviour
 {
-    public void SetHDResolution()
+    private void Update()
     {
-        Debug.Log(Screen.width + ":" + Screen.height);
-        GameManager.Instance.SetResolution(1280, 720);
-    }
-    
-    public void SetFHDResolution()
-    {
-        Debug.Log(Screen.width + ":" + Screen.height);
-        GameManager.Instance.SetResolution(1920, 1080);
-    }
+        Pointer pointer = Pointer.current;
+        if (pointer == null || !pointer.press.wasPressedThisFrame) return;
 
-    public void SetQHDResolution()
-    {
-        Debug.Log(Screen.width + ":" + Screen.height);
-        GameManager.Instance.SetResolution(2560, 1440);
-    }
-    
-    public void Set4kResolution()
-    {
-        Debug.Log(Screen.width + ":" + Screen.height);
-        GameManager.Instance.SetResolution(3840, 2160);
+        GameManager.Instance?.StartGame(pointer.position.ReadValue());
     }
 }
