@@ -1,0 +1,287 @@
+#pragma kernel InitializeParticles
+#pragma kernel InitializeTextParticles
+#pragma kernel ClearOutput
+#pragma kernel UpdateParticles
+#pragma kernel DrawParticles
+
+struct SandTextParticle
+{
+    float2 position;
+    float2 velocity;
+    float2 homePosition;
+    float4 color;
+    uint active;
+    float padding;
+};
+
+struct SandTextSeed
+{
+    float2 homePosition;
+    float2 atlasUv;
+    float4 color;
+    uint active;
+    float padding;
+};
+
+RWStructuredBuffer<SandTextParticle> _Particles;
+StructuredBuffer<SandTextSeed> _TextSeeds;
+Texture2D<float4> _MaskTexture;
+RWTexture2D<float4> _OutputTexture;
+
+int _ParticleCount;
+int2 _OutputSize;
+int2 _MaskSize;
+float4 _ContentPixelRect;
+float4 _MaskUvRect;
+float4 _TintColor;
+float _MaskAlphaThreshold;
+float _BrightnessVariation;
+float _RandomSeed;
+int _UseMaskColor;
+int _FlipMaskY;
+
+float _DeltaTime;
+float _ElapsedTime;
+float2 _PointerPosition;
+float _ScatterAmount;
+float _ScatterRadius;
+float _ScatterStrength;
+float _ReturnStrength;
+float _HoverHomeStrength;
+float _VelocityDamping;
+float _Gravity;
+float _TurbulenceStrength;
+float _TurbulenceScale;
+float _MaxSpeed;
+float _GrainRadius;
+
+float Hash11(float value)
+{
+    value = frac(value * 0.1031);
+    value *= value + 33.33;
+    value *= value + value;
+    return frac(value);
+}
+
+float2 ParticleUv(uint particleIndex)
+{
+    // Irrational increments give a more even distribution than two unrelated
+    // random calls while retaining enough variation to look like loose grains.
+    float seedOffset = Hash11(_RandomSeed + 17.0);
+    return frac(
+        float2(0.5, 0.5) +
+        (particleIndex + seedOffset) * float2(0.754877666, 0.569840296));
+}
+
+float SignedNoise(float2 position, uint particleIndex)
+{
+    float phase =
+        dot(position * _TurbulenceScale, float2(1.731, 2.417)) +
+        _ElapsedTime * 2.13 +
+        particleIndex * 0.6180339;
+    return sin(phase) * cos(phase * 0.73 + 1.91);
+}
+
+[numthreads(64, 1, 1)]
+void InitializeParticles(uint3 dispatchId : SV_DispatchThreadID)
+{
+    uint index = dispatchId.x;
+    if (index >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    float2 localUv = ParticleUv(index);
+    float2 maskUv = _MaskUvRect.xy + localUv * _MaskUvRect.zw;
+
+    if (_FlipMaskY != 0)
+    {
+        maskUv.y = _MaskUvRect.y + _MaskUvRect.w -
+            (maskUv.y - _MaskUvRect.y);
+    }
+
+    int2 maskPixel = clamp(
+        (int2)(maskUv * _MaskSize),
+        int2(0, 0),
+        _MaskSize - 1);
+    float4 maskSample = _MaskTexture.Load(int3(maskPixel, 0));
+
+    SandTextParticle particle;
+    particle.position = _ContentPixelRect.xy +
+        localUv * max(_ContentPixelRect.zw - 1.0, float2(1.0, 1.0));
+    particle.velocity = float2(0.0, 0.0);
+    particle.homePosition = particle.position;
+
+    float3 baseColor = _UseMaskColor != 0
+        ? maskSample.rgb
+        : float3(1.0, 1.0, 1.0);
+    float brightness = lerp(
+        1.0 - _BrightnessVariation,
+        1.0 + _BrightnessVariation,
+        Hash11(index + _RandomSeed * 31.7));
+    particle.color = float4(
+        saturate(baseColor * _TintColor.rgb * brightness),
+        saturate(maskSample.a * _TintColor.a));
+    particle.active = maskSample.a >= _MaskAlphaThreshold ? 1 : 0;
+    particle.padding = 0.0;
+
+    _Particles[index] = particle;
+}
+
+[numthreads(64, 1, 1)]
+void InitializeTextParticles(uint3 dispatchId : SV_DispatchThreadID)
+{
+    uint index = dispatchId.x;
+    if (index >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    SandTextSeed seed = _TextSeeds[index];
+    float2 atlasUv = seed.atlasUv;
+    if (_FlipMaskY != 0)
+    {
+        atlasUv.y = 1.0 - atlasUv.y;
+    }
+
+    int2 atlasPixel = clamp(
+        (int2)(atlasUv * _MaskSize),
+        int2(0, 0),
+        _MaskSize - 1);
+    float4 maskSample = _MaskTexture.Load(int3(atlasPixel, 0));
+
+    SandTextParticle particle;
+    particle.position = seed.homePosition;
+    particle.velocity = float2(0.0, 0.0);
+    particle.homePosition = seed.homePosition;
+
+    float4 sourceColor = _UseMaskColor != 0
+        ? seed.color
+        : float4(1.0, 1.0, 1.0, 1.0);
+    float brightness = lerp(
+        1.0 - _BrightnessVariation,
+        1.0 + _BrightnessVariation,
+        Hash11(index + _RandomSeed * 31.7));
+    particle.color = float4(
+        saturate(sourceColor.rgb * _TintColor.rgb * brightness),
+        saturate(sourceColor.a * maskSample.a * _TintColor.a));
+    particle.active = seed.active != 0 &&
+        maskSample.a >= _MaskAlphaThreshold ? 1 : 0;
+    particle.padding = 0.0;
+
+    _Particles[index] = particle;
+}
+
+[numthreads(8, 8, 1)]
+void ClearOutput(uint3 dispatchId : SV_DispatchThreadID)
+{
+    if (dispatchId.x >= (uint)_OutputSize.x ||
+        dispatchId.y >= (uint)_OutputSize.y)
+    {
+        return;
+    }
+
+    _OutputTexture[dispatchId.xy] = float4(0.0, 0.0, 0.0, 0.0);
+}
+
+[numthreads(64, 1, 1)]
+void UpdateParticles(uint3 dispatchId : SV_DispatchThreadID)
+{
+    uint index = dispatchId.x;
+    if (index >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    SandTextParticle particle = _Particles[index];
+    if (particle.active == 0)
+    {
+        return;
+    }
+
+    float2 toPointer = particle.position - _PointerPosition;
+    float pointerDistance = max(length(toPointer), 0.001);
+    float pointerFalloff = saturate(1.0 - pointerDistance / max(_ScatterRadius, 0.001));
+    pointerFalloff = pointerFalloff * pointerFalloff * (3.0 - 2.0 * pointerFalloff);
+
+    float2 repelDirection = toPointer / pointerDistance;
+    float2 repelAcceleration =
+        repelDirection * _ScatterStrength * pointerFalloff;
+
+    float noise = SignedNoise(particle.position, index);
+    float2 turbulentAcceleration = float2(noise, -abs(noise * 0.45)) *
+        _TurbulenceStrength;
+    float2 gravityAcceleration = float2(0.0, -_Gravity);
+
+    // Retain a small spring while scattered so particles cannot drift forever.
+    float hoverSpringMultiplier = lerp(1.0, _HoverHomeStrength, _ScatterAmount);
+    float2 returnAcceleration =
+        (particle.homePosition - particle.position) *
+        _ReturnStrength * hoverSpringMultiplier;
+
+    float2 scatterAcceleration =
+        repelAcceleration + turbulentAcceleration + gravityAcceleration;
+    float2 acceleration =
+        returnAcceleration + scatterAcceleration * _ScatterAmount;
+
+    particle.velocity += acceleration * _DeltaTime;
+    particle.velocity *= exp(-max(_VelocityDamping, 0.0) * _DeltaTime);
+
+    float speed = length(particle.velocity);
+    if (speed > _MaxSpeed && speed > 0.001)
+    {
+        particle.velocity *= _MaxSpeed / speed;
+    }
+
+    particle.position += particle.velocity * _DeltaTime;
+
+    if (_ScatterAmount < 0.001 &&
+        distance(particle.position, particle.homePosition) < 0.05 &&
+        length(particle.velocity) < 0.05)
+    {
+        particle.position = particle.homePosition;
+        particle.velocity = float2(0.0, 0.0);
+    }
+
+    _Particles[index] = particle;
+}
+
+[numthreads(64, 1, 1)]
+void DrawParticles(uint3 dispatchId : SV_DispatchThreadID)
+{
+    uint index = dispatchId.x;
+    if (index >= (uint)_ParticleCount)
+    {
+        return;
+    }
+
+    SandTextParticle particle = _Particles[index];
+    if (particle.active == 0)
+    {
+        return;
+    }
+
+    int2 center = (int2)round(particle.position);
+    int radius = clamp(_GrainRadius, 0, 3);
+
+    for (int offsetY = -radius; offsetY <= radius; offsetY++)
+    {
+        for (int offsetX = -radius; offsetX <= radius; offsetX++)
+        {
+            int2 pixel = center + int2(offsetX, offsetY);
+            if (pixel.x < 0 || pixel.x >= _OutputSize.x ||
+                pixel.y < 0 || pixel.y >= _OutputSize.y)
+            {
+                continue;
+            }
+
+            if (radius > 0 &&
+                length(float2(offsetX, offsetY)) > radius + 0.25)
+            {
+                continue;
+            }
+
+            _OutputTexture[pixel] = particle.color;
+        }
+    }
+}
