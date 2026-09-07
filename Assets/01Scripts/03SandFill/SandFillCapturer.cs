@@ -55,6 +55,7 @@ public class SandFillCapturer : MonoBehaviour
         }
 
         fillPercentage = (float)filledCount / pixels.Length * 100f;
+        AudioManager.Instance?.RegisterFillPercentage(fillPercentage);
         Debug.Log($"Screen is {fillPercentage}% full of sand!");
     }
 }

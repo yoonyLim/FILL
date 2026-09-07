@@ -45,6 +45,8 @@ float _ElapsedTime;
 float2 _PointerPosition;
 float _ScatterAmount;
 float _ScatterRadius;
+float _ScatterRadiusRoughness;
+float _ScatterDirectionRandomness;
 float _ScatterStrength;
 float _ReturnStrength;
 float _HoverHomeStrength;
@@ -80,6 +82,35 @@ float SignedNoise(float2 position, uint particleIndex)
         _ElapsedTime * 2.13 +
         particleIndex * 0.6180339;
     return sin(phase) * cos(phase * 0.73 + 1.91);
+}
+
+float2 WindDirection(SandTextParticle particle, uint particleIndex)
+{
+    float2 flowPosition = particle.homePosition * 0.027 +
+        float2(_ElapsedTime * 0.38, _ElapsedTime * -0.21);
+    float x = SignedNoise(flowPosition + float2(19.17, 4.63), particleIndex);
+    float y = SignedNoise(flowPosition.yx + float2(7.91, 23.44), particleIndex + 97);
+    float2 direction = float2(x, y);
+    float lengthSquared = dot(direction, direction);
+
+    if (lengthSquared < 0.0001)
+    {
+        float angle = Hash11(particleIndex * 11.31 + _RandomSeed * 5.73) * 6.2831853;
+        return float2(cos(angle), sin(angle));
+    }
+
+    return direction * rsqrt(lengthSquared);
+}
+
+float2 SafeNormalize(float2 direction, float2 fallbackDirection)
+{
+    float lengthSquared = dot(direction, direction);
+    if (lengthSquared < 0.0001)
+    {
+        return fallbackDirection;
+    }
+
+    return direction * rsqrt(lengthSquared);
 }
 
 [numthreads(64, 1, 1)]
@@ -201,20 +232,35 @@ void UpdateParticles(uint3 dispatchId : SV_DispatchThreadID)
 
     float2 toPointer = particle.position - _PointerPosition;
     float pointerDistance = max(length(toPointer), 0.001);
-    float pointerFalloff = saturate(1.0 - pointerDistance / max(_ScatterRadius, 0.001));
+    float angleNoise = Hash11(
+        floor(atan2(toPointer.y, toPointer.x) * 10.185916 + 128.0) +
+        _RandomSeed * 13.73);
+    float particleNoise = Hash11(index * 17.17 + _RandomSeed * 29.41);
+    float radiusNoise = lerp(angleNoise, particleNoise, 0.35) * 2.0 - 1.0;
+    float roughRadius = _ScatterRadius *
+        (1.0 + radiusNoise * saturate(_ScatterRadiusRoughness) * 0.45);
+    float pointerFalloff = saturate(1.0 - pointerDistance / max(roughRadius, 0.001));
     pointerFalloff = pointerFalloff * pointerFalloff * (3.0 - 2.0 * pointerFalloff);
+    float localScatterAmount = _ScatterAmount * pointerFalloff;
 
     float2 repelDirection = toPointer / pointerDistance;
+    float2 windDirection = WindDirection(particle, index);
+    float2 scatterDirection = SafeNormalize(lerp(
+        repelDirection,
+        windDirection,
+        saturate(_ScatterDirectionRandomness)),
+        windDirection);
     float2 repelAcceleration =
-        repelDirection * _ScatterStrength * pointerFalloff;
+        scatterDirection * _ScatterStrength * pointerFalloff;
 
     float noise = SignedNoise(particle.position, index);
     float2 turbulentAcceleration = float2(noise, -abs(noise * 0.45)) *
         _TurbulenceStrength;
     float2 gravityAcceleration = float2(0.0, -_Gravity);
 
-    // Retain a small spring while scattered so particles cannot drift forever.
-    float hoverSpringMultiplier = lerp(1.0, _HoverHomeStrength, _ScatterAmount);
+    // Only loosen the home spring near the pointer. Particles outside the
+    // cursor radius keep holding the source shape instead of globally sagging.
+    float hoverSpringMultiplier = lerp(1.0, _HoverHomeStrength, localScatterAmount);
     float2 returnAcceleration =
         (particle.homePosition - particle.position) *
         _ReturnStrength * hoverSpringMultiplier;
@@ -222,7 +268,7 @@ void UpdateParticles(uint3 dispatchId : SV_DispatchThreadID)
     float2 scatterAcceleration =
         repelAcceleration + turbulentAcceleration + gravityAcceleration;
     float2 acceleration =
-        returnAcceleration + scatterAcceleration * _ScatterAmount;
+        returnAcceleration + scatterAcceleration * localScatterAmount;
 
     particle.velocity += acceleration * _DeltaTime;
     particle.velocity *= exp(-max(_VelocityDamping, 0.0) * _DeltaTime);

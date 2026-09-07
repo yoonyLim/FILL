@@ -1,6 +1,7 @@
 #pragma kernel Update
 
 RWTexture2D<float4> Result;
+RWStructuredBuffer<uint> AudioEventCounts;
 int Width;
 int Height;
 float2 MousePos;
@@ -123,11 +124,13 @@ void Update (uint3 id : SV_DispatchThreadID)
         {
             Result[id.xy + uint2(-1, -1)] = current;
             Result[id.xy] = float4(0, 0, 0, 0);
+            InterlockedAdd(AudioEventCounts[0], 1);
         }
         else if (id.x < (uint)Width - 1 && Result[id.xy + uint2(1, -1)].a == 0)
         {
             Result[id.xy + uint2(1, -1)] = current;
             Result[id.xy] = float4(0, 0, 0, 0);
+            InterlockedAdd(AudioEventCounts[0], 1);
         }
     }
 }

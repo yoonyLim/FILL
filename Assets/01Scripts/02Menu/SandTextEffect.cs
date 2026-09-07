@@ -87,6 +87,10 @@ public sealed class SandTextEffect : MonoBehaviour,
 
     [Header("Motion (render-texture pixels)")]
     [Min(1f)] [SerializeField] private float scatterRadius = 90f;
+    [Tooltip("Randomizes the cursor radius per particle so the disturbed edge is not a perfect circle.")]
+    [Range(0f, 1f)] [SerializeField] private float scatterRadiusRoughness = 0.35f;
+    [Tooltip("Blends the cursor push direction with animated wind-like noise. 0 is radial, 1 is fully wind-driven.")]
+    [Range(0f, 1f)] [SerializeField] private float scatterDirectionRandomness = 0.65f;
     [Min(0f)] [SerializeField] private float scatterStrength = 900f;
     [Min(0f)] [SerializeField] private float returnStrength = 18f;
     [Range(0f, 1f)] [SerializeField] private float hoverHomeStrength = 0.08f;
@@ -142,6 +146,8 @@ public sealed class SandTextEffect : MonoBehaviour,
     private static readonly int PointerPositionId = Shader.PropertyToID("_PointerPosition");
     private static readonly int ScatterAmountId = Shader.PropertyToID("_ScatterAmount");
     private static readonly int ScatterRadiusId = Shader.PropertyToID("_ScatterRadius");
+    private static readonly int ScatterRadiusRoughnessId = Shader.PropertyToID("_ScatterRadiusRoughness");
+    private static readonly int ScatterDirectionRandomnessId = Shader.PropertyToID("_ScatterDirectionRandomness");
     private static readonly int ScatterStrengthId = Shader.PropertyToID("_ScatterStrength");
     private static readonly int ReturnStrengthId = Shader.PropertyToID("_ReturnStrength");
     private static readonly int HoverHomeStrengthId = Shader.PropertyToID("_HoverHomeStrength");
@@ -670,6 +676,8 @@ public sealed class SandTextEffect : MonoBehaviour,
         sandTextCompute.SetVector(PointerPositionId, _pointerTexturePosition);
         sandTextCompute.SetFloat(ScatterAmountId, _hoverAmount);
         sandTextCompute.SetFloat(ScatterRadiusId, scatterRadius);
+        sandTextCompute.SetFloat(ScatterRadiusRoughnessId, scatterRadiusRoughness);
+        sandTextCompute.SetFloat(ScatterDirectionRandomnessId, scatterDirectionRandomness);
         sandTextCompute.SetFloat(ScatterStrengthId, scatterStrength);
         sandTextCompute.SetFloat(ReturnStrengthId, returnStrength);
         sandTextCompute.SetFloat(HoverHomeStrengthId, hoverHomeStrength);
@@ -806,6 +814,8 @@ public sealed class SandTextEffect : MonoBehaviour,
         edgePadding.y = Mathf.Max(0f, edgePadding.y);
         grainRadius = Mathf.Clamp(grainRadius, 0, 3);
         scatterRadius = Mathf.Max(1f, scatterRadius);
+        scatterRadiusRoughness = Mathf.Clamp01(scatterRadiusRoughness);
+        scatterDirectionRandomness = Mathf.Clamp01(scatterDirectionRandomness);
         turbulenceScale = Mathf.Max(0.0001f, turbulenceScale);
         maxSpeed = Mathf.Max(1f, maxSpeed);
         hoverTransitionSpeed = Mathf.Max(0.01f, hoverTransitionSpeed);
