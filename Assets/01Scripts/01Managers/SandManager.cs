@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 using UnityEngine.Serialization;
 
 public class SandManager : MonoBehaviour
@@ -10,6 +11,8 @@ public class SandManager : MonoBehaviour
     public float brushSize = 10f;
     [Min(1f)] public float simulationStepsPerSecond = 60f;
     [Min(1)] public int maxSimulationStepsPerFrame = 8;
+    [Min(1)] [SerializeField] private int sandFlowMoundingEventThreshold = 1;
+    [Min(0.01f)] [SerializeField] private float sandFlowAudioGraceTime = 0.16f;
 
     [Header("Sand Appearance")]
     [SerializeField] private Color sandColor = new(0.8f, 0.7f, 0.4f, 1f); // rgb: 204, 178.5, 102
@@ -19,7 +22,11 @@ public class SandManager : MonoBehaviour
     [Min(0.5f)] [SerializeField] private float randomColorTransitionDuration = 4f;
 
     private RenderTexture _sandTexture;
+    private ComputeBuffer _audioEventBuffer;
+    private readonly uint[] _audioEventCounts = new uint[1];
+    private Texture2D _debugFillTexture;
     private int _kernelIndex;
+    private int _audioEventCountsId;
     private int _width;
     private int _height;
     private float _simulationAccumulator;
@@ -28,6 +35,9 @@ public class SandManager : MonoBehaviour
     private bool _pointerPressed;
     private bool _pendingBurst;
     private bool _inputEnabled = true;
+    private bool _sandFlowPlaying;
+    private bool _audioReadbackPending;
+    private float _lastMoundingAudioTime = -999f;
     private uint _spawnRandomSeed;
     private float _currentRandomColorHue;
     private float _randomColorStartHue;
@@ -41,6 +51,7 @@ public class SandManager : MonoBehaviour
     void Awake()
     {
         _kernelIndex = sandCompute.FindKernel("Update");
+        _audioEventCountsId = Shader.PropertyToID("AudioEventCounts");
         _currentRandomColorHue = Random.value;
         _randomColorStartHue = _currentRandomColorHue;
         _randomColorTargetHue = ChooseNextRandomHue(_currentRandomColorHue);
@@ -61,6 +72,9 @@ public class SandManager : MonoBehaviour
 
         UpdateRandomColorHue();
         CapturePointerInput();
+#if UNITY_EDITOR
+        CaptureDebugInput();
+#endif
 
         float stepDuration = 1f / Mathf.Max(1f, simulationStepsPerSecond);
         int maxSteps = Mathf.Max(1, maxSimulationStepsPerFrame);
@@ -85,6 +99,8 @@ public class SandManager : MonoBehaviour
             _simulationAccumulator -= stepDuration;
             completedSteps++;
         }
+
+        UpdateSandFlowAudio();
     }
 
     private void CapturePointerInput()
@@ -108,15 +124,50 @@ public class SandManager : MonoBehaviour
         }
     }
 
+#if UNITY_EDITOR
+    private void CaptureDebugInput()
+    {
+        if (Keyboard.current == null)
+        {
+            return;
+        }
+
+        if (Keyboard.current.digit1Key.wasPressedThisFrame ||
+            Keyboard.current.numpad1Key.wasPressedThisFrame)
+        {
+            DebugFillSand(0.25f);
+        }
+        else if (Keyboard.current.digit2Key.wasPressedThisFrame ||
+                 Keyboard.current.numpad2Key.wasPressedThisFrame)
+        {
+            DebugFillSand(0.5f);
+        }
+        else if (Keyboard.current.digit3Key.wasPressedThisFrame ||
+                 Keyboard.current.numpad3Key.wasPressedThisFrame)
+        {
+            DebugFillSand(0.75f);
+        }
+        else if (Keyboard.current.digit4Key.wasPressedThisFrame ||
+                 Keyboard.current.numpad4Key.wasPressedThisFrame)
+        {
+            DebugFillSand(0.995f);
+        }
+    }
+#endif
+
     private void DispatchSimulation(Vector2 inputPosition, bool isBurst, bool isDragging)
     {
         if (isBurst || isDragging)
         {
             _spawnRandomSeed++;
+            AudioManager.Instance?.NotifySandProduced();
         }
 
         // Pass data to GPU
+        _audioEventCounts[0] = 0;
+        _audioEventBuffer.SetData(_audioEventCounts);
         sandCompute.SetTexture(_kernelIndex, "Result", _sandTexture);
+        sandCompute.SetBuffer(_kernelIndex, _audioEventCountsId, _audioEventBuffer);
         sandCompute.SetVector("MousePos", inputPosition);
         sandCompute.SetFloat("BrushSize", brushSize);
         sandCompute.SetVector("SandColor", sandColor);
@@ -134,6 +185,7 @@ public class SandManager : MonoBehaviour
         int threadGroupX = Mathf.CeilToInt(_width / 8f);
         int threadGroupY = Mathf.CeilToInt(_height / 8f);
         sandCompute.Dispatch(_kernelIndex, threadGroupX, threadGroupY, 1);
+        RequestAudioEventReadback();
     }
 
     private void UpdateRandomColorHue()
@@ -209,6 +261,7 @@ public class SandManager : MonoBehaviour
         {
             _pointerPressed = false;
             _pendingBurst = false;
+            StopSandFlowAudio();
         }
     }
 
@@ -257,6 +310,7 @@ public class SandManager : MonoBehaviour
         _simulationAccumulator = 0f;
         _pointerPressed = false;
         _pendingBurst = false;
+        StopSandFlowAudio();
 
         if (_sandTexture == null || !_sandTexture.IsCreated())
         {
@@ -264,6 +318,13 @@ public class SandManager : MonoBehaviour
         }
 
         ClearTexture();
+    }
+
+    public void DebugFillSand(float normalizedFill)
+    {
+#if UNITY_EDITOR
+        SetDebugSandFill(normalizedFill);
+#endif
     }
 
     public void SetResolution(int width, int height)
@@ -294,8 +355,12 @@ public class SandManager : MonoBehaviour
         _simulationAccumulator = 0f;
         _pointerPressed = false;
         _pendingBurst = false;
+        StopSandFlowAudio();
 
         ReleaseSandTexture();
+        ReleaseAudioEventBuffer();
+
+        _audioEventBuffer = new ComputeBuffer(1, sizeof(uint), ComputeBufferType.Structured);
 
         _sandTexture = new RenderTexture(_width, _height, 0)
         {
@@ -324,6 +389,56 @@ public class SandManager : MonoBehaviour
         RenderTexture.active = previousTexture;
     }
 
+    private void SetDebugSandFill(float normalizedFill)
+    {
+        if (_sandTexture == null || !_sandTexture.IsCreated())
+        {
+            return;
+        }
+
+        normalizedFill = Mathf.Clamp01(normalizedFill);
+        int filledRows = Mathf.RoundToInt(_height * normalizedFill);
+
+        if (_debugFillTexture == null ||
+            _debugFillTexture.width != _width ||
+            _debugFillTexture.height != _height)
+        {
+            if (_debugFillTexture != null)
+            {
+                Destroy(_debugFillTexture);
+            }
+
+            _debugFillTexture = new Texture2D(
+                _width,
+                _height,
+                TextureFormat.RGBA32,
+                false);
+        }
+
+        Color[] pixels = new Color[_width * _height];
+        Color fillColor = sandColor;
+        fillColor.a = 1f;
+
+        for (int y = 0; y < filledRows; y++)
+        {
+            int rowStart = y * _width;
+            for (int x = 0; x < _width; x++)
+            {
+                pixels[rowStart + x] = fillColor;
+            }
+        }
+
+        _debugFillTexture.SetPixels(pixels);
+        _debugFillTexture.Apply(false);
+
+        Graphics.Blit(_debugFillTexture, _sandTexture);
+        _simulationAccumulator = 0f;
+        _pendingBurst = false;
+        _pointerPressed = false;
+        StopSandFlowAudio();
+        AudioManager.Instance?.RegisterFillPercentage(normalizedFill * 100f);
+    }
+
     private void ReleaseSandTexture()
     {
         if (_sandTexture == null) return;
@@ -342,8 +457,90 @@ public class SandManager : MonoBehaviour
         _sandTexture = null;
     }
 
+    private void ReleaseAudioEventBuffer()
+    {
+        _audioReadbackPending = false;
+        _audioEventBuffer?.Release();
+        _audioEventBuffer = null;
+    }
+
     private void OnDestroy()
     {
+        StopSandFlowAudio();
+        ReleaseAudioEventBuffer();
         ReleaseSandTexture();
+
+        if (_debugFillTexture != null)
+        {
+            Destroy(_debugFillTexture);
+            _debugFillTexture = null;
+        }
+    }
+
+    private void OnDisable()
+    {
+        StopSandFlowAudio();
+    }
+
+    private void OnValidate()
+    {
+        sandFlowMoundingEventThreshold = Mathf.Max(1, sandFlowMoundingEventThreshold);
+        sandFlowAudioGraceTime = Mathf.Max(0.01f, sandFlowAudioGraceTime);
+    }
+
+    private void UpdateSandFlowAudio()
+    {
+        bool shouldPlay = Time.unscaledTime - _lastMoundingAudioTime <= sandFlowAudioGraceTime;
+
+        if (shouldPlay)
+        {
+            if (!_sandFlowPlaying && AudioManager.Instance != null)
+            {
+                AudioManager.Instance.PlaySandFlow();
+                _sandFlowPlaying = true;
+            }
+
+            return;
+        }
+
+        StopSandFlowAudio();
+    }
+
+    private void StopSandFlowAudio()
+    {
+        if (!_sandFlowPlaying)
+        {
+            return;
+        }
+
+        AudioManager.Instance?.StopSandFlow();
+        _sandFlowPlaying = false;
+    }
+
+    private void RequestAudioEventReadback()
+    {
+        if (_audioReadbackPending || _audioEventBuffer == null)
+        {
+            return;
+        }
+
+        _audioReadbackPending = true;
+        AsyncGPUReadback.Request(_audioEventBuffer, OnAudioEventReadback);
+    }
+
+    private void OnAudioEventReadback(AsyncGPUReadbackRequest request)
+    {
+        _audioReadbackPending = false;
+
+        if (request.hasError || _audioEventBuffer == null)
+        {
+            return;
+        }
+
+        uint moundingEvents = request.GetData<uint>()[0];
+        if (moundingEvents >= sandFlowMoundingEventThreshold)
+        {
+            _lastMoundingAudioTime = Time.unscaledTime;
+        }
     }
 }
